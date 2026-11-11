@@ -1,0 +1,7 @@
+# MSS bot dependencies (same floors as the S4 / MultiScan / Push350 bots)
+project-x-py>=4.0
+pyyaml>=6.0
+polars>=1.0
+
+# Test-only
+pytest>=8.0
