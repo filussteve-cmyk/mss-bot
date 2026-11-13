@@ -72,13 +72,26 @@ def load_config() -> dict:
     return cfg
 
 
+def _max_trades_per_day(cfg: dict):
+    """Daily trade cap from config: 0, blank, or missing = no cap (None).
+
+    A positive value caps entries per day; None/0 lets every setup
+    through the trade-count gate (the -$500 halt still applies).
+    """
+    raw = cfg.get("max_trades_per_day", 0)
+    if raw is None:
+        return None
+    value = int(raw)
+    return None if value <= 0 else value
+
+
 def mss_params_from_dict(d: dict) -> MssParams:
     md = d.get("mss", {}) or {}
     return MssParams(
         tick=float(d.get("market", {}).get("tick", 0.25)),
         swing_lookback_15m=int(md.get("swing_lookback_15m", 2)),
         swing_lookback_1h=int(md.get("swing_lookback_1h", 2)),
-        min_displacement_points=float(md.get("min_displacement_points", 4.0)),
+        min_displacement_points=float(md.get("min_displacement_points", 3.5)),
         displacement_search_bars=int(md.get("displacement_search_bars", 5)),
         displacement_max_bars=int(md.get("displacement_max_bars", 3)),
         ob_min_candles=int(md.get("ob_min_candles", 2)),
@@ -99,6 +112,8 @@ def blank_state() -> dict:
         "seen_setup_keys": [],    # setup keys already decided on
         "voided_setup_keys": [],
         "done_setup_keys": [],
+        "seen_partial_keys": [],  # partial-sweep keys already logged
+        "partials_today": [],     # PartialSetup dicts logged today
         "armed_setup": None,      # MssSetup dict or None
         "trades_today": 0,
         "closed_trades": [],      # paper ClosedTrade dicts
@@ -145,6 +160,30 @@ def sync_state(state: dict, ex: PaperExecutor) -> None:
     state["open_position"] = ex.position.to_dict() if ex.position else None
     state["pending_limit"] = ex.pending.to_dict() if ex.pending else None
     state["daily_pnl"] = ex.realized_pnl()
+
+
+def log_new_partials(state: dict, bars_15m: list, params: MssParams) -> None:
+    """Log each near-miss sweep once (dedupe by PartialSetup.key).
+
+    The old log dropped partial sweeps silently, so a quiet day hid
+    whether anything came close to the 4-pt displacement threshold.
+    Updates state["seen_partial_keys"] / state["partials_today"];
+    the caller saves state.
+    """
+    seen_p = set(state.get("seen_partial_keys", []))
+    for p in strategy_mss.scan_partials(bars_15m, params):
+        if p.key in seen_p:
+            continue
+        seen_p.add(p.key)
+        state["seen_partial_keys"] = sorted(seen_p)
+        state.setdefault("partials_today", []).append(asdict(p))
+        log.info("PARTIAL MSS %s sweep %.2f @ 15m bar %d: %s "
+                 "(best displacement %.2f pts vs %.2f min, FVG %s, "
+                 "MSS %s, through 15m bar %d)",
+                 p.direction, p.sweep_level, p.sweep_idx, p.reason,
+                 p.best_disp_points, params.min_displacement_points,
+                 "yes" if p.had_fvg else "no",
+                 "yes" if p.had_mss else "no", p.last_bar_idx)
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +276,7 @@ def run_smoke(cfg: dict) -> int:
         has_position=False, trades_today=0,
         now=datetime(2026, 11, 11, 10, 0, tzinfo=ET), daily_pnl=0.0,
         max_daily_loss=float(cfg.get("max_daily_loss", 500.0)),
-        max_trades_per_day=int(cfg.get("max_trades_per_day", 2)))
+        max_trades_per_day=_max_trades_per_day(cfg))
     assert ok, f"smoke risk gate failed: {reason}"
 
     ex = PaperExecutor()
@@ -344,11 +383,15 @@ async def main() -> None:
     point_value = float(market.get("point_value", 50.0))
     size = int(cfg.get("size", 1))
     max_daily_loss = float(cfg.get("max_daily_loss", 500.0))
-    max_trades = int(cfg.get("max_trades_per_day", 2))
+    max_trades = _max_trades_per_day(cfg)
     poll_seconds = int(cfg.get("poll_seconds", 60))
 
     log.info("MSS starting in PAPER mode: %s, ZERO orders will be placed.",
              symbol)
+    log.info("Guardrails: max_trades_per_day=%s, min_displacement=%.2f pts, "
+             "halt -$%.0f, entry 09:30-12:00 ET, flat 16:00 ET.",
+             "uncapped" if max_trades is None else max_trades,
+             params.min_displacement_points, max_daily_loss)
 
     # ProjectX REST client directly — NOT TradingSuite (its realtime
     # WebSockets cannot traverse this machine's egress proxy). This bot
@@ -382,6 +425,12 @@ async def main() -> None:
     last_bars_5m: list = []
     last_close_5m: float | None = None
     last_bias = state.get("last_bias", "neutral")
+    # Fresh-bar lists, initialized here so the 16:00 flatten branch can
+    # run its final partial-sweep pass even on the first iteration
+    # (e.g. a post-16:00 restart), when no refresh has happened yet.
+    bars_1h: list = []
+    bars_15m: list = []
+    bars_5m: list = []
 
     while True:
         now = risk.now_et()
@@ -416,6 +465,21 @@ async def main() -> None:
                 state["armed_setup"] = None
             sync_state(state, executor)
             save_state(state)
+            # Final partial-sweep pass: anything the bot was too busy
+            # to log while a position/limit was open still lands in
+            # the log for the wrap, with a one-line summary.
+            if bars_15m:
+                log_new_partials(state, bars_15m, params)
+                save_state(state)
+            parts = state.get("partials_today", [])
+            if parts:
+                closest = max(parts,
+                              key=lambda d: d["best_disp_points"])
+                log.info("MSS partials today: %d near-miss sweep(s); "
+                         "closest was %s sweep %.2f, %.2f pts (%s).",
+                         len(parts), closest["direction"],
+                         closest["sweep_level"],
+                         closest["best_disp_points"], closest["reason"])
             log.info("Session over (16:00 ET). Exiting.")
             break
 
@@ -543,6 +607,9 @@ async def main() -> None:
         # 6) Scan 15m for newly armed setups; decide once, never carry.
         if bars_15m and not executor.has_position \
                 and not executor.has_pending and not state.get("halted"):
+            # Log near-miss sweeps once (see log_new_partials).
+            log_new_partials(state, bars_15m, params)
+            save_state(state)
             seen = set(state.get("seen_setup_keys", []))
             voided = set(state.get("voided_setup_keys", []))
             done = set(state.get("done_setup_keys", []))

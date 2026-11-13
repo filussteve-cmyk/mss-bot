@@ -118,7 +118,7 @@ def test_no_fvg_when_gap_filled():
 
 
 def test_displacement_threshold_blocks_small_move():
-    # Same shape but displacement only 2 pts (< 4.0 default).
+    # Same shape but displacement only 2 pts (< 3.5 default).
     bars = mk(BULL_15M)
     sweeps = strategy_mss.detect_sweeps(bars)
     assert sweeps
@@ -241,6 +241,82 @@ def test_target_opposing_liquidity_when_far_enough():
     assert s.risk_points == 8.25
     assert s.target == 130.0
     assert s.target_method == "opposing_liquidity"
+
+
+# ---------------------------------------------------------------------------
+# Partial setups (near-miss sweeps)
+# ---------------------------------------------------------------------------
+
+# Quiet tail after the textbook sequence: no new sweeps, lets the
+# displacement window (sweep bar 9 + 5) fully elapse (len 17 > 15).
+TAIL = [
+    (7658, 7659, 7657, 7658),
+    (7657, 7658, 7656, 7657),
+    (7656, 7657, 7655, 7656),
+    (7655, 7656, 7654, 7655),
+]
+
+
+def test_partial_not_reported_before_window_closes():
+    # Only 13 bars: the sweep's displacement window (through bar 15)
+    # hasn't elapsed, so no verdict yet — even with a 30-pt threshold.
+    bars = mk(BULL_15M)
+    assert strategy_mss.scan_partials(
+        bars, MssParams(min_displacement_points=30.0)) == []
+
+
+def test_partial_no_displacement_reports_best_leg():
+    bars = mk(BULL_15M + TAIL)
+    parts = strategy_mss.scan_partials(
+        bars, MssParams(min_displacement_points=30.0))
+    assert len(parts) == 1
+    p = parts[0]
+    assert p.direction == "long" and p.reason == "no_displacement"
+    assert p.best_disp_points == 28.0
+    assert p.had_fvg is True  # an FVG formed — size alone blocked it
+    assert p.sweep_idx == 9 and p.trigger_level == 7660.0
+    assert strategy_mss.scan_15m(
+        bars, MssParams(min_displacement_points=30.0)) == []
+
+
+def test_partial_no_fvg():
+    spec = list(BULL_15M)
+    spec[12] = (7660, 7666, 7650, 7664)  # kills the FVG
+    bars = mk(spec + TAIL)
+    parts = strategy_mss.scan_partials(bars)
+    assert len(parts) == 1
+    p = parts[0]
+    assert p.reason == "no_fvg" and p.best_disp_points == 28.0
+    assert p.had_fvg is False and p.had_mss is False
+
+
+def test_partial_no_mss():
+    # Same bars as test_mss_no_break, with the window elapsed.
+    spec = list(BULL_15M)
+    spec[11] = (7650, 7659, 7656, 7658)  # high 7659 < trigger 7660
+    spec[12] = (7658, 7659, 7655, 7659)  # up-closed, keeps FVG + leg
+    bars = mk(spec + TAIL)
+    parts = strategy_mss.scan_partials(bars)
+    assert len(parts) == 1
+    p = parts[0]
+    assert p.reason == "no_mss" and p.best_disp_points == 21.0
+    assert p.had_fvg is True
+
+
+def test_partial_bearish_mirror():
+    spec = list(BULL_15M)
+    spec[12] = (7660, 7666, 7650, 7664)  # kills the FVG
+    bars = mk(mirror(spec + TAIL))
+    parts = strategy_mss.scan_partials(bars)
+    assert len(parts) == 1
+    p = parts[0]
+    assert p.direction == "short" and p.reason == "no_fvg"
+
+
+def test_full_setup_has_no_partial():
+    bars = mk(BULL_15M + TAIL)
+    assert strategy_mss.scan_partials(bars) == []
+    assert len(strategy_mss.scan_15m(bars)) == 1
 
 
 # ---------------------------------------------------------------------------

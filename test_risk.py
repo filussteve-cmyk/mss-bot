@@ -66,6 +66,14 @@ def test_can_open_blocked_at_trade_cap():
     assert ok
 
 
+def test_can_open_uncapped():
+    # max_trades_per_day None or 0 = no daily cap (Steve, Nov 13 2026).
+    ok, _ = risk.can_open(False, 5, now=at(10, 0), max_trades_per_day=None)
+    assert ok
+    ok, _ = risk.can_open(False, 5, now=at(10, 0), max_trades_per_day=0)
+    assert ok
+
+
 def test_can_open_blocked_on_daily_loss():
     ok, reason = risk.can_open(False, 0, now=at(10, 0), daily_pnl=-500.0)
     assert not ok and "halt" in reason

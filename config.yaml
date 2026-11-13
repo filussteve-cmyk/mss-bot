@@ -21,7 +21,7 @@ mode: "paper"
 # Account / risk (family guardrails)
 size: 1                    # contracts per trade
 max_daily_loss: 500.0      # halt new entries if daily P&L <= -$500
-max_trades_per_day: 2      # ICT MSS setups are rare; 2/day default
+max_trades_per_day: 0      # 0 = no daily trade cap (Steve, Nov 13 2026)
 poll_seconds: 60           # main-loop cadence during RTH
 
 # Market — ES front month, resolved at startup. NQ may be added later
@@ -36,7 +36,7 @@ market:
 mss:
   swing_lookback_15m: 2    # swing = fractal extreme of +/-2 bars (15m)
   swing_lookback_1h: 2     # same for the 1H bias frame
-  min_displacement_points: 4.0   # displacement leg must move >= 4 ES pts
+  min_displacement_points: 3.5   # displacement leg must move >= 3.5 ES pts
   displacement_search_bars: 5    # leg must start within 5 bars of the sweep
   displacement_max_bars: 3       # leg = at most 3 same-direction candles
   ob_min_candles: 2        # order block needs >= 2 opposite-closed candles

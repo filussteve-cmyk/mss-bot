@@ -59,7 +59,7 @@ class MssParams:
     # Displacement: a one-sided leg of >= this many points, starting
     # within displacement_search_bars of the sweep bar, at most
     # displacement_max_bars consecutive same-direction candles long.
-    min_displacement_points: float = 4.0
+    min_displacement_points: float = 3.5
     displacement_search_bars: int = 5
     displacement_max_bars: int = 3
     # Order block: consecutive opposite-closed candles immediately
@@ -227,6 +227,61 @@ class Displacement:
     ob: Optional[OrderBlock]
 
 
+@dataclass
+class LegCandidate:
+    """One candidate displacement leg for a sweep: consecutive
+    same-direction-closed candles starting within the search window,
+    with its total move from the sweep extreme and the first 3-candle
+    FVG inside it (None when there is none). NOT filtered on the
+    minimum size — callers decide what counts, so the near-misses
+    stay visible for tuning."""
+    start_idx: int
+    end_idx: int
+    size_points: float
+    fvg: Optional[Fvg]
+
+
+@dataclass
+class PartialSetup:
+    """A sweep that never became an armed setup — the near-miss the
+    log used to drop silently.
+
+    reason:
+      - "no_displacement": no leg within the search window moved
+        >= min_displacement_points. best_disp_points is the biggest
+        leg found, so a 3.25 vs the 3.5 threshold shows up here.
+      - "no_fvg": a leg cleared the size threshold but left no
+        3-candle FVG inside it.
+      - "no_mss": displacement + FVG formed but price never traded
+        through the trigger level (as of the last bar scanned — if
+        it breaks later, scan_15m() picks it up as a full setup and
+        the setup log supersedes this line).
+    had_fvg is True when ANY candidate leg left an FVG, even a
+    too-small one — so a "no_displacement" partial with had_fvg
+    True means size alone blocked it.
+    """
+    direction: str
+    sweep_level: float
+    pool_idx: int
+    sweep_idx: int
+    trigger_level: float
+    trigger_idx: int
+    reason: str           # "no_displacement" | "no_fvg" | "no_mss"
+    best_disp_points: float
+    had_fvg: bool
+    had_mss: bool
+    last_bar_idx: int     # last 15m bar scanned
+
+    @property
+    def key(self) -> str:
+        """Stable dedupe key: one partial line per sweep."""
+        return (f"partial:{self.direction}:{self.pool_idx}:"
+                f"{self.sweep_idx}")
+
+    def to_dict(self) -> dict:
+        return dict(self.__dict__)
+
+
 def find_fvg(bars: List[Bar], start_idx: int, end_idx: int,
              direction: str) -> Optional[Fvg]:
     """First 3-candle FVG fully inside [start_idx, end_idx]."""
@@ -270,21 +325,22 @@ def find_order_block(bars: List[Bar], leg_start_idx: int, direction: str,
         start_idx=run[-1].idx, end_idx=run[0].idx, candles=len(run))
 
 
-def find_displacement(bars: List[Bar], sweep: Sweep,
-                      params: MssParams = ES_PARAMS) -> Optional[Displacement]:
-    """The sharp one-sided leg away from a sweep, with its FVG + OB.
+def _leg_candidates(bars: List[Bar], sweep: Sweep,
+                    params: MssParams = ES_PARAMS) -> List[LegCandidate]:
+    """Every candidate displacement leg for a sweep, unfiltered.
 
-    Tries each possible leg start within displacement_search_bars of the
-    sweep bar: a leg is consecutive same-direction-closed candles
-    (capped at displacement_max_bars) whose total move from the sweep
-    extreme is >= min_displacement_points and which leaves a 3-candle
-    FVG inside the leg. The first leg that satisfies all of that wins.
+    Same enumeration find_displacement always used: each possible leg
+    start within displacement_search_bars of the sweep bar, extended
+    over consecutive same-direction-closed candles (capped at
+    displacement_max_bars), with its total move from the sweep
+    extreme and the first 3-candle FVG inside the leg.
     """
     up = sweep.direction == "long"
     sweep_extreme = bars[sweep.sweep_idx].low if up \
         else bars[sweep.sweep_idx].high
     search_end = min(len(bars),
                      sweep.sweep_idx + 1 + params.displacement_search_bars)
+    out: List[LegCandidate] = []
     for leg_start in range(sweep.sweep_idx + 1, search_end):
         first = bars[leg_start]
         if (first.close > first.open) != up:
@@ -300,14 +356,31 @@ def find_displacement(bars: List[Bar], sweep: Sweep,
         leg = bars[leg_start:leg_end + 1]
         size = (max(b.high for b in leg) - sweep_extreme) if up \
             else (sweep_extreme - min(b.low for b in leg))
-        if size < params.min_displacement_points:
+        out.append(LegCandidate(
+            start_idx=leg_start, end_idx=leg_end, size_points=size,
+            fvg=find_fvg(bars, leg_start, leg_end, sweep.direction)))
+    return out
+
+
+def find_displacement(bars: List[Bar], sweep: Sweep,
+                      params: MssParams = ES_PARAMS) -> Optional[Displacement]:
+    """The sharp one-sided leg away from a sweep, with its FVG + OB.
+
+    The first candidate leg whose move is >= min_displacement_points
+    and which leaves a 3-candle FVG inside it wins. Same semantics
+    as before — now built on _leg_candidates so the rejected legs
+    stay available to scan_partials.
+    """
+    for cand in _leg_candidates(bars, sweep, params):
+        if cand.size_points < params.min_displacement_points:
             continue
-        fvg = find_fvg(bars, leg_start, leg_end, sweep.direction)
-        if fvg is None:
+        if cand.fvg is None:
             continue
-        ob = find_order_block(bars, leg_start, sweep.direction, params)
-        return Displacement(direction=sweep.direction, start_idx=leg_start,
-                            end_idx=leg_end, size_points=size, fvg=fvg,
+        ob = find_order_block(bars, cand.start_idx, sweep.direction, params)
+        return Displacement(direction=sweep.direction,
+                            start_idx=cand.start_idx,
+                            end_idx=cand.end_idx,
+                            size_points=cand.size_points, fvg=cand.fvg,
                             ob=ob)
     return None
 
@@ -416,6 +489,45 @@ def scan_15m(bars: List[Bar], params: MssParams = ES_PARAMS) -> List[MssSetup]:
         setups.append(_build_setup(bars, sweep, disp, mss_idx, params))
     setups.sort(key=lambda s: s.arm_idx)
     return setups
+
+
+def scan_partials(bars: List[Bar], params: MssParams = ES_PARAMS
+                  ) -> List[PartialSetup]:
+    """Every sweep that did NOT become an armed setup, with why.
+
+    Only sweeps whose displacement search window has fully elapsed
+    are reported (len(bars) > sweep_idx + 1 + displacement_search_bars),
+    so a "no_displacement" verdict can't be undone by a leg that
+    hasn't formed yet. A "no_mss" verdict is as of the last bar
+    scanned. Sweeps that became full setups are excluded — scan_15m()
+    reports those.
+    """
+    partials: List[PartialSetup] = []
+    for sweep in detect_sweeps(bars, params):
+        if len(bars) <= sweep.sweep_idx + 1 + params.displacement_search_bars:
+            continue
+        cands = _leg_candidates(bars, sweep, params)
+        best = max((c.size_points for c in cands), default=0.0)
+        had_fvg = any(c.fvg is not None for c in cands)
+        disp = find_displacement(bars, sweep, params)
+        if disp is not None:
+            if find_mss(bars, sweep, disp) is not None:
+                continue  # full setup — scan_15m() reports it
+            reason = "no_mss"
+        elif any(c.size_points >= params.min_displacement_points
+                 for c in cands):
+            reason = "no_fvg"
+        else:
+            reason = "no_displacement"
+        partials.append(PartialSetup(
+            direction=sweep.direction, sweep_level=sweep.level,
+            pool_idx=sweep.pool_idx, sweep_idx=sweep.sweep_idx,
+            trigger_level=sweep.trigger_level,
+            trigger_idx=sweep.trigger_idx, reason=reason,
+            best_disp_points=round(best, 2), had_fvg=had_fvg,
+            had_mss=False, last_bar_idx=len(bars) - 1))
+    partials.sort(key=lambda p: p.sweep_idx)
+    return partials
 
 
 # ---------------------------------------------------------------------------

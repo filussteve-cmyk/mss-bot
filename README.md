@@ -46,7 +46,7 @@ named parameter in `config.yaml` (`mss:` block) with the default shown.
 
 | Open point | Mechanical choice (default) | Why |
 |---|---|---|
-| Displacement size threshold (ICT gives none) | `min_displacement_points: 4.0` ES points, leg starting within 5 bars of the sweep, at most 3 same-direction candles | 4 pts is a sharp move on ES without being so large it rarely fires; a leg that takes > 5 bars to start is no longer "displacement" (Ep.3 stresses the move is sharp and immediate) |
+| Displacement size threshold (ICT gives none) | `min_displacement_points: 3.5` ES points, leg starting within 5 bars of the sweep, at most 3 same-direction candles | 3.5 pts is a sharp move on ES without being so large it rarely fires; a leg that takes > 5 bars to start is no longer "displacement" (Ep.3 stresses the move is sharp and immediate) |
 | Which swing counts | Fractal extreme of **±2 bars** on 15m (`swing_lookback_15m: 2`), same ±2 on 1H | ±2 is the short-term swing ICT draws by hand; ±5 (the S4 bot's lookback) would make the MSS trigger too slow for a day trade |
 | Order-block length | ≥ 2 consecutive opposite-closed candles to count (`ob_min_candles: 2`), at most 5 used for the zone (`ob_max_candles: 5`) | A single down candle is noise; 2+ is a real push. The OB zone is the full run's [low, high]. No OB found → the setup still trades (FVG is the entry zone, OB is secondary) |
 | FVG entry level | Limit at the **FVG 50% midpoint** (`entry_zone: "fvg_mid"`); fill when a 5m bar trades through the midpoint | The midpoint is the ICT "equilibrium" of the gap and the standard retracement entry; a limit there cannot chase. `ob_mid` is available in config as an alternative |
@@ -75,7 +75,7 @@ named parameter in `config.yaml` (`mss:` block) with the default shown.
 |---|---|
 | `strategy_mss.py` | Sweep / displacement / FVG / order-block / MSS detectors, HTF bias, entry evaluation, target logic, `MssParams` |
 | `models.py` | `Bar`, `MssSetup` dataclasses |
-| `risk.py` | Pure guards: RTH, 16:00 flatten, 09:30–12:00 entry window, -$500 halt, 1 position, max 2 trades/day |
+| `risk.py` | Pure guards: RTH, 16:00 flatten, 09:30–12:00 entry window, -$500 halt, 1 position, no daily trade cap |
 | `paper_exec.py` | Virtual limit entries, stop/target exits, 16:00 flatten. No order code |
 | `bot.py` | Poll loop (60s), 1H/15m/5m bar fetch, bias + scan + arm + manage, `--smoke` |
 | `config.yaml` | Mode `paper`, ES market, all `mss:` parameters |
@@ -99,11 +99,18 @@ Offline check first (no auth, no orders):
 State lives in `state.json` (armed setup, pending limit, closed trades,
 daily P&L); the daily log is `paper-YYYY-MM-DD.log`.
 
+Near-miss sweeps are logged too, once each, as `PARTIAL MSS ...`
+lines (`no_displacement` / `no_fvg` / `no_mss`, with the biggest leg
+found vs the 4-pt minimum) — a quiet day used to hide whether
+anything came close to the displacement threshold. They are also
+kept in `state.json` under `partials_today`, and the 16:00 flatten
+logs a one-line partials summary for the wrap.
+
 ## Guardrails
 
 - 1 contract, ES only, $50/pt. RTH 09:30–16:00 ET, flat by 16:00,
   no overnight. Entry window 09:30–12:00 ET. Max 1 open position,
-  max 2 paper trades/day, -$500 paper daily loss halt.
+  no daily paper-trade cap, -$500 paper daily loss halt.
 - A setup is decided once, at first detection (take it or skip it);
   it is never carried to a later poll. A pending limit voids on: gap
   through the swept level, HTF bias flip, 12 unfilled 5m bars, or

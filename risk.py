@@ -9,7 +9,8 @@ bots):
     here by construction).
   - Entries only in the ICT window 09:30-12:00 ET (trade 8:30am-noon
     NY per ICT; RTH entry window 09:30-12:00 ET).
-  - Max 1 open position. Max 2 paper trades/day (configurable).
+  - Max 1 open position. No daily trade cap by default (config
+    max_trades_per_day: 0 or absent = unlimited; a positive value caps it).
   - Daily loss halt: no new entries once daily P&L <= -$500.
 
 There are NO broker helpers in this file: this bot is paper-only and
@@ -72,7 +73,7 @@ def can_open(has_position: bool,
              now: Optional[datetime] = None,
              daily_pnl: float = 0.0,
              max_daily_loss: float = MAX_DAILY_LOSS,
-             max_trades_per_day: int = 2) -> Tuple[bool, str]:
+             max_trades_per_day: Optional[int] = None) -> Tuple[bool, str]:
     """Gate for a new entry. Returns (ok, reason).
 
     Order matters: the flatten check comes first so a call at/after
@@ -87,7 +88,7 @@ def can_open(has_position: bool,
         return False, "outside entry window (09:30-12:00 ET)"
     if has_position:
         return False, "position already open (max 1)"
-    if trades_today >= max_trades_per_day:
+    if max_trades_per_day and trades_today >= max_trades_per_day:
         return False, f"daily trade cap reached ({trades_today}/{max_trades_per_day})"
     if daily_loss_halted(daily_pnl, max_daily_loss):
         return False, f"daily loss halt hit ({daily_pnl:.2f} <= -{max_daily_loss:.2f})"
