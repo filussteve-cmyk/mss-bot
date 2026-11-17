@@ -20,9 +20,11 @@ def test_in_rth_boundaries():
 def test_entry_window_boundaries():
     assert risk.in_entry_window(at(9, 30))
     assert risk.in_entry_window(at(11, 59))
+    assert risk.in_entry_window(at(14, 0))
+    assert risk.in_entry_window(at(15, 49))
     assert not risk.in_entry_window(at(9, 29))
-    assert not risk.in_entry_window(at(12, 0))
-    assert not risk.in_entry_window(at(14, 0))
+    assert not risk.in_entry_window(at(15, 50))
+    assert not risk.in_entry_window(at(16, 0))
 
 
 def test_should_flatten_at_1600():
@@ -43,9 +45,15 @@ def test_can_open_ok_in_window():
     assert ok, reason
 
 
-def test_can_open_blocked_after_noon():
-    ok, reason = risk.can_open(False, 0, now=at(12, 30))
+def test_can_open_blocked_after_window_close():
+    ok, reason = risk.can_open(False, 0, now=at(15, 50))
     assert not ok and "entry window" in reason
+
+
+def test_can_open_ok_in_afternoon():
+    # Window extended to 15:50 ET (Steve, Nov 17 2026): 12:30 trades.
+    ok, reason = risk.can_open(False, 0, now=at(12, 30))
+    assert ok, reason
 
 
 def test_can_open_blocked_at_flatten():

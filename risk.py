@@ -7,8 +7,9 @@ bots):
     can_open below, is evaluated BEFORE any RTH-close exit so it can
     never be skipped (the S4 bot's latent 16:09-vs-16:00 bug, fixed
     here by construction).
-  - Entries only in the ICT window 09:30-12:00 ET (trade 8:30am-noon
-    NY per ICT; RTH entry window 09:30-12:00 ET).
+  - Entries only in the 09:30-15:50 ET window (ICT teaches
+    8:30am-noon NY; Steve extended the window to 15:50 ET on
+    Nov 17, 2026).
   - Max 1 open position. No daily trade cap by default (config
     max_trades_per_day: 0 or absent = unlimited; a positive value caps it).
   - Daily loss halt: no new entries once daily P&L <= -$500.
@@ -27,7 +28,7 @@ RTH_OPEN = time(9, 30)       # regular trading hours start (ET)
 RTH_CLOSE = time(16, 0)      # regular trading hours end (ET)
 FLATTEN_TIME = time(16, 0)   # flat by 16:00 ET — no overnight, ever
 ENTRY_WINDOW_OPEN = time(9, 30)   # ICT entry window (RTH portion)
-ENTRY_WINDOW_CLOSE = time(12, 0)  # no new entries after noon ET
+ENTRY_WINDOW_CLOSE = time(15, 50)  # no new entries after 15:50 ET (Steve, Nov 17 2026)
 MAX_DAILY_LOSS = 500.0
 
 
@@ -56,8 +57,9 @@ def should_flatten(now: Optional[datetime] = None) -> bool:
 
 
 def in_entry_window(now: Optional[datetime] = None) -> bool:
-    """True during the 09:30-12:00 ET entry window (ICT: trade
-    8:30am-noon NY; the RTH portion is 09:30-12:00 ET)."""
+    """True during the 09:30-15:50 ET entry window (ICT teaches
+    8:30am-noon NY; Steve extended the close to 15:50 ET on
+    Nov 17, 2026)."""
     now = now or now_et()
     return ENTRY_WINDOW_OPEN <= _time_of(now) < ENTRY_WINDOW_CLOSE
 
@@ -85,7 +87,7 @@ def can_open(has_position: bool,
     if not in_rth(now):
         return False, "outside RTH"
     if not in_entry_window(now):
-        return False, "outside entry window (09:30-12:00 ET)"
+        return False, "outside entry window (09:30-15:50 ET)"
     if has_position:
         return False, "position already open (max 1)"
     if max_trades_per_day and trades_today >= max_trades_per_day:

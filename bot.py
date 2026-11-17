@@ -389,7 +389,7 @@ async def main() -> None:
     log.info("MSS starting in PAPER mode: %s, ZERO orders will be placed.",
              symbol)
     log.info("Guardrails: max_trades_per_day=%s, min_displacement=%.2f pts, "
-             "halt -$%.0f, entry 09:30-12:00 ET, flat 16:00 ET.",
+             "halt -$%.0f, entry 09:30-15:50 ET, flat 16:00 ET.",
              "uncapped" if max_trades is None else max_trades,
              params.min_displacement_points, max_daily_loss)
 
@@ -551,7 +551,7 @@ async def main() -> None:
                 if not risk.in_entry_window(now):
                     executor.cancel_pending()
                     state["voided_setup_keys"].append(armed.key)
-                    log.warning("Setup voided: entry window ended (12:00 ET).")
+                    log.warning("Setup voided: entry window ended (15:50 ET).")
                     armed = None
                     state["armed_setup"] = None
                     sync_state(state, executor)
@@ -633,7 +633,7 @@ async def main() -> None:
                     continue
                 if not risk.in_entry_window(now):
                     log.info("Setup skipped: outside entry window "
-                             "(09:30-12:00 ET).")
+                             "(09:30-15:50 ET).")
                     continue
                 ok, reason = risk.can_open(
                     has_position=False, trades_today=state["trades_today"],

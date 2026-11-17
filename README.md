@@ -31,7 +31,8 @@ Sources (ICT / @innercircletrader):
    above/below is required — trading through is enough (Ep.3).
 5. **Entry** — wait for retracement into the displacement FVG. Limit at
    the FVG 50% midpoint. Never chase displacement. Entry window
-   09:30–12:00 ET (ICT: trade 8:30am–noon NY).
+   09:30–15:50 ET (ICT teaches 8:30am–noon NY; Steve extended the
+   window to 15:50 on Nov 17, 2026).
 6. **Stops / invalidation** — stop beyond the swept level / order block.
    The idea is void if price gaps through the swept level without
    filling, if HTF bias flips away from the setup, if no fill comes
@@ -64,7 +65,8 @@ named parameter in `config.yaml` (`mss:` block) with the default shown.
   measured move cover the cases); it is not in the code.
 - **NY kill zone (7:00–10:00am ET):** the bot trades RTH only, so the
   7:00–9:30 pre-market portion of the kill zone is out of scope. The
-  entry window (09:30–12:00) covers the kill zone's RTH portion.
+  entry window (09:30–15:50) covers the kill zone's RTH portion and
+  extends past it, per Steve's Nov 17, 2026 direction.
 - **"Old/equal" liquidity age:** ICT prefers sweeping older, more
   obvious pools. The detector treats every confirmed swing as a pool
   with no age weighting — a future scoring layer could rank pools.
@@ -75,7 +77,7 @@ named parameter in `config.yaml` (`mss:` block) with the default shown.
 |---|---|
 | `strategy_mss.py` | Sweep / displacement / FVG / order-block / MSS detectors, HTF bias, entry evaluation, target logic, `MssParams` |
 | `models.py` | `Bar`, `MssSetup` dataclasses |
-| `risk.py` | Pure guards: RTH, 16:00 flatten, 09:30–12:00 entry window, -$500 halt, 1 position, no daily trade cap |
+| `risk.py` | Pure guards: RTH, 16:00 flatten, 09:30–15:50 entry window, -$500 halt, 1 position, no daily trade cap |
 | `paper_exec.py` | Virtual limit entries, stop/target exits, 16:00 flatten. No order code |
 | `bot.py` | Poll loop (60s), 1H/15m/5m bar fetch, bias + scan + arm + manage, `--smoke` |
 | `config.yaml` | Mode `paper`, ES market, all `mss:` parameters |
@@ -109,12 +111,12 @@ logs a one-line partials summary for the wrap.
 ## Guardrails
 
 - 1 contract, ES only, $50/pt. RTH 09:30–16:00 ET, flat by 16:00,
-  no overnight. Entry window 09:30–12:00 ET. Max 1 open position,
+  no overnight. Entry window 09:30–15:50 ET. Max 1 open position,
   no daily paper-trade cap, -$500 paper daily loss halt.
 - A setup is decided once, at first detection (take it or skip it);
   it is never carried to a later poll. A pending limit voids on: gap
   through the swept level, HTF bias flip, 12 unfilled 5m bars, or
-  12:00 ET.
+  15:50 ET.
 - Detection is a full-session replay over the 15m bars (same pattern as
   the MultiScan scanner), so a restart reproduces the same setup set.
 
